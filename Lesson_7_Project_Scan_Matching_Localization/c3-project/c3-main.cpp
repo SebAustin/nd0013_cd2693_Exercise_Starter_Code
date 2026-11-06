@@ -229,7 +229,7 @@ int main(){
 			cloudFiltered = voxelFilter(currentScan, kScanLeafSize);
 
 			// Step 2: NDT-match the Scan to the Map, seeded by a constant-velocity Initial guess.
-			const Eigen::Matrix4d initialGuess = predictNextTransform(previousTransform, currentTransform);
+			const Eigen::Matrix4d initialGuess = currentTransform;  // EXPERIMENT: no motion prediction
 			const Eigen::Matrix4d estimate = localizer.align(cloudFiltered, initialGuess);
 			previousTransform = currentTransform;
 			currentTransform = estimate;
