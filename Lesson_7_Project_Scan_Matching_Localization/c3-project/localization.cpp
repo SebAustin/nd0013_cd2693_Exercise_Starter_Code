@@ -9,9 +9,17 @@ constexpr double kMaxPlausibleStepMetres = 3.0;
 }
 
 PointCloudT::Ptr voxelFilter(const PointCloudT::Ptr& cloud, float leafSize) {
+	// EXPERIMENT: drop road-surface returns (lidar is 1.8 m up) so ground rings can't bias NDT.
+	PointCloudT::Ptr aboveGround(new PointCloudT);
+	for (const auto& p : cloud->points) {
+		if (p.z > -1.4f) aboveGround->points.push_back(p);
+	}
+	aboveGround->width = aboveGround->points.size();
+	aboveGround->height = 1;
+
 	PointCloudT::Ptr filtered(new PointCloudT);
 	pcl::VoxelGrid<PointT> grid;
-	grid.setInputCloud(cloud);
+	grid.setInputCloud(aboveGround);
 	grid.setLeafSize(leafSize, leafSize, leafSize);
 	grid.filter(*filtered);
 	return filtered;
