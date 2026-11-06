@@ -259,12 +259,6 @@ int main(){
 			previousScanTime = scanTime;
 			const double latencyFraction = scanInterval > 0.0 ? std::min(std::max(latency / scanInterval, 0.0), kMaxLatencyFraction) : 0.0;
 			pose = getPose(extrapolateMotion(previousTransform, currentTransform, latencyFraction));
-			cout << "scan pts=" << cloudFiltered->size()
-			     << " conv=" << localizer.hasConverged() << " it=" << localizer.iterations()
-			     << " fit=" << localizer.fitnessScore() << " lat=" << latency << " dt=" << scanInterval
-			     << " guess=(" << initialGuess(0,3) << "," << initialGuess(1,3) << ")"
-			     << " est=(" << pose.position.x << "," << pose.position.y << "," << pose.position.z << " yaw " << pose.rotation.yaw << ")"
-			     << " true=(" << truePose.position.x << "," << truePose.position.y << "," << truePose.position.z << " yaw " << truePose.rotation.yaw << ")" << endl;
 
 			// Step 3: move the Scan into the Map frame using the Pose estimate and render it.
 			pcl::transformPointCloud(*cloudFiltered, *transformedScan, estimate);
