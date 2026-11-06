@@ -35,11 +35,20 @@ using namespace std;
 #include <pcl/registration/ndt.h>
 #include <pcl/console/time.h>   // TicToc
 #include <pcl/common/transforms.h>
-#include <pcl/kdtree/kdtree_flann.h>
 #include "localization.h"
 
 // Voxel leaf size (m) applied to each Scan before matching: fewer points = faster NDT.
 constexpr float kScanLeafSize = 0.5f;
+
+// The workspace simulator build (newer than the 0.9.9.4 client) reports lidar points
+// as (-x, -y, -z) relative to the frame map.pcd was recorded in. Verified on the VM by
+// a grid search at the ground-truth pose: inverting all three axes is the only variant
+// that fits the Map, and it fits at zero offset. Converting here keeps every later
+// step in the Map's convention.
+template <typename Detection>
+PointT toMapConvention(const Detection& detection){
+	return PointT(-detection.x, -detection.y, -detection.z);
+}
 
 PointCloudT pclCloud;
 cc::Vehicle::Control control;
@@ -155,16 +164,9 @@ int main(){
 
 		if(new_scan){
 			auto scan = boost::static_pointer_cast<csd::LidarMeasurement>(data);
-			static int rawDumps = 0;  // DIAG: inspect raw point layout
-			if (rawDumps < 2 && scan->size() > 12) {
-				rawDumps++;
-				cout << "RAW size=" << scan->size() << " channels=" << scan->GetChannelCount() << " :";
-				for (size_t k = 0; k < 12; ++k) { auto d = (*scan)[k]; cout << " (" << d.x << "," << d.y << "," << d.z << ")"; }
-				cout << endl;
-			}
 			for (auto detection : *scan){
 				if((detection.x*detection.x + detection.y*detection.y + detection.z*detection.z) > 8.0){
-					pclCloud.points.push_back(PointT(detection.x, detection.y, detection.z));
+					pclCloud.points.push_back(toMapConvention(detection));
 				}
 			}
 			if(pclCloud.points.size() > 5000){ // CANDO: Can modify this value to get different scan resolutions
@@ -180,7 +182,6 @@ int main(){
 
 	// Scan matcher: the Map's NDT grid is built once here, not per Scan.
 	NdtLocalizer localizer(mapCloud, NdtConfig{});
-	pcl::KdTreeFLANN<PointT> mapTree; mapTree.setInputCloud(mapCloud);  // DIAG
 	PointCloudT::Ptr transformedScan(new PointCloudT);
 	// Ground-truth pose is used exactly once, to seed the first Pose estimate.
 	bool isPoseInitialized = false;
@@ -243,46 +244,6 @@ int main(){
 			previousTransform = currentTransform;
 			currentTransform = estimate;
 			pose = getPose(estimate);
-			{   // DIAG: mean NN distance of the scan to the map at truth vs at the estimate, and sweep coverage
-				auto meanNN = [&](const Eigen::Matrix4d& T){
-					PointCloudT moved; pcl::transformPointCloud(*cloudFiltered, moved, T);
-					double sum = 0; std::vector<int> idx(1); std::vector<float> d2(1);
-					for (const auto& p : moved.points){ mapTree.nearestKSearch(p, 1, idx, d2); sum += std::sqrt(d2[0]); }
-					return sum / std::max<size_t>(1, moved.size());
-				};
-				int bins[8] = {0};
-				for (const auto& p : currentScan->points){ int b = int((std::atan2(p.y, p.x) + pi) / (2*pi) * 8) % 8; bins[b]++; }
-				static bool searched = false;
-				if (!searched) {  // one-time grid search: which frame variant makes the scan fit the map at truth?
-					searched = true;
-					auto inlierFrac = [&](const Eigen::Matrix4d& Tm){
-						PointCloudT moved; pcl::transformPointCloud(*cloudFiltered, moved, Tm);
-						int in = 0; std::vector<int> idx(1); std::vector<float> d2(1);
-						for (const auto& p : moved.points){ mapTree.nearestKSearch(p, 1, idx, d2); if (d2[0] < 0.09f) in++; }
-						return double(in) / std::max<size_t>(1, moved.size());
-					};
-					const Eigen::Matrix4d T0 = poseToMatrix(truePose);
-					cout << "GRID truth inliers=" << inlierFrac(T0) << endl;
-					double best = -1; std::string bestDesc;
-					for (int flip = 0; flip < 2; ++flip) for (int yawFlip = 0; yawFlip < 2; ++yawFlip) for (int fz = 0; fz < 2; ++fz)
-					for (double dx = -2; dx <= 2.01; dx += 0.25) for (double dy = -2; dy <= 2.01; dy += 0.25) {
-						Eigen::Matrix4d F = Eigen::Matrix4d::Identity(); if (flip) F(1,1) = -1; if (fz) F(2,2) = -1;
-						Eigen::Matrix4d R = transform3D(yawFlip ? pi : 0, 0, 0, 0, 0, 0);
-						Eigen::Matrix4d D = transform3D(0, 0, 0, dx, dy, 0);
-						const double f = inlierFrac(D * T0 * R * F);
-						if (f > best) { best = f; bestDesc = "flipY=" + to_string(flip) + " yawPi=" + to_string(yawFlip) + " flipZ=" + to_string(fz) + " dx=" + to_string(dx) + " dy=" + to_string(dy); }
-					}
-					cout << "GRID best inliers=" << best << " " << bestDesc << endl;
-				}
-				Eigen::Matrix4d flipY = Eigen::Matrix4d::Identity(); flipY(1,1) = -1;
-				Eigen::Matrix4d down = Eigen::Matrix4d::Identity(); down(2,3) = -1.8;
-				const Eigen::Matrix4d T = poseToMatrix(truePose);
-				cout << "VAR plain=" << meanNN(T) << " flipY=" << meanNN(T*flipY) << " down=" << meanNN(down*T)
-				     << " flipYdown=" << meanNN(down*T*flipY) << endl;
-				cout << "DIAG nnTruth=" << meanNN(poseToMatrix(truePose)) << " nnEst=" << meanNN(estimate) << " sectors=";
-				for (int b : bins) cout << b << ",";
-				cout << endl;
-			}
 			cout << "scan pts=" << cloudFiltered->size()
 			     << " conv=" << localizer.hasConverged() << " it=" << localizer.iterations()
 			     << " fit=" << localizer.fitnessScore()
