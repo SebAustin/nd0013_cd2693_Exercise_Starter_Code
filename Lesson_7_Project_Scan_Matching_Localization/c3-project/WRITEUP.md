@@ -14,7 +14,7 @@ Localizes a manually driven CARLA car by matching each lidar **Scan** against th
 
 The **ground-truth pose** is read once, to seed the first Pose estimate; after that, localization uses lidar only.
 
-## Two problems found on the VM workspace
+## Three problems found on the VM workspace
 
 **1. Lidar axis convention.** The workspace simulator is a different build from the 0.9.9.4 client (hence the "version mismatch" warning). It reports lidar points rotated 90° about z with z inverted relative to the frame `map.pcd` was recorded in. With the raw points, NDT drifted metres while the car was parked, and only ~1% of points landed within 0.3 m of the Map at the true pose. A one-off search over yaw (15° steps) × axis flips × small offsets at the true pose singled out `(x, y, z) → (−y, x, −z)` at zero offset, with 86% inliers. Every point is converted on ingestion.
 
