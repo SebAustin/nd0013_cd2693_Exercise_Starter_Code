@@ -245,6 +245,11 @@ int main(){
 				};
 				int bins[8] = {0};
 				for (const auto& p : currentScan->points){ int b = int((std::atan2(p.y, p.x) + pi) / (2*pi) * 8) % 8; bins[b]++; }
+				Eigen::Matrix4d flipY = Eigen::Matrix4d::Identity(); flipY(1,1) = -1;
+				Eigen::Matrix4d down = Eigen::Matrix4d::Identity(); down(2,3) = -1.8;
+				const Eigen::Matrix4d T = poseToMatrix(truePose);
+				cout << "VAR plain=" << meanNN(T) << " flipY=" << meanNN(T*flipY) << " down=" << meanNN(down*T)
+				     << " flipYdown=" << meanNN(down*T*flipY) << endl;
 				cout << "DIAG nnTruth=" << meanNN(poseToMatrix(truePose)) << " nnEst=" << meanNN(estimate) << " sectors=";
 				for (int b : bins) cout << b << ",";
 				cout << endl;
