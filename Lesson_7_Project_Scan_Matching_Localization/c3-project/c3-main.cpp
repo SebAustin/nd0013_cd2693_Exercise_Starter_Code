@@ -35,6 +35,7 @@ using namespace std;
 #include <pcl/registration/ndt.h>
 #include <pcl/console/time.h>   // TicToc
 #include <pcl/common/transforms.h>
+#include <pcl/kdtree/kdtree_flann.h>
 #include "localization.h"
 
 // Voxel leaf size (m) applied to each Scan before matching: fewer points = faster NDT.
@@ -172,6 +173,7 @@ int main(){
 
 	// Scan matcher: the Map's NDT grid is built once here, not per Scan.
 	NdtLocalizer localizer(mapCloud, NdtConfig{});
+	pcl::KdTreeFLANN<PointT> mapTree; mapTree.setInputCloud(mapCloud);  // DIAG
 	PointCloudT::Ptr transformedScan(new PointCloudT);
 	// Ground-truth pose is used exactly once, to seed the first Pose estimate.
 	bool isPoseInitialized = false;
@@ -234,6 +236,19 @@ int main(){
 			previousTransform = currentTransform;
 			currentTransform = estimate;
 			pose = getPose(estimate);
+			{   // DIAG: mean NN distance of the scan to the map at truth vs at the estimate, and sweep coverage
+				auto meanNN = [&](const Eigen::Matrix4d& T){
+					PointCloudT moved; pcl::transformPointCloud(*cloudFiltered, moved, T);
+					double sum = 0; std::vector<int> idx(1); std::vector<float> d2(1);
+					for (const auto& p : moved.points){ mapTree.nearestKSearch(p, 1, idx, d2); sum += std::sqrt(d2[0]); }
+					return sum / std::max<size_t>(1, moved.size());
+				};
+				int bins[8] = {0};
+				for (const auto& p : currentScan->points){ int b = int((std::atan2(p.y, p.x) + pi) / (2*pi) * 8) % 8; bins[b]++; }
+				cout << "DIAG nnTruth=" << meanNN(poseToMatrix(truePose)) << " nnEst=" << meanNN(estimate) << " sectors=";
+				for (int b : bins) cout << b << ",";
+				cout << endl;
+			}
 			cout << "scan pts=" << cloudFiltered->size()
 			     << " conv=" << localizer.hasConverged() << " it=" << localizer.iterations()
 			     << " fit=" << localizer.fitnessScore()
