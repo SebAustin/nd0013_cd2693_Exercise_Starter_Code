@@ -35,21 +35,20 @@ using namespace std;
 #include <pcl/registration/ndt.h>
 #include <pcl/console/time.h>   // TicToc
 #include <pcl/common/transforms.h>
-#include <pcl/kdtree/kdtree_flann.h>  // DIAG
-#include <algorithm>
 #include "localization.h"
 
 // Voxel leaf size (m) applied to each Scan before matching: fewer points = faster NDT.
 constexpr float kScanLeafSize = 0.5f;
 
-// The workspace simulator build (newer than the 0.9.9.4 client) reports lidar points
-// as (-x, -y, -z) relative to the frame map.pcd was recorded in. Verified on the VM by
-// a grid search at the ground-truth pose: inverting all three axes is the only variant
-// that fits the Map, and it fits at zero offset. Converting here keeps every later
-// step in the Map's convention.
+// The workspace simulator build (newer than the 0.9.9.4 client, hence the "version
+// mismatch" warning) reports lidar points rotated 90 deg about z and with z inverted
+// relative to the frame map.pcd was recorded in. Verified on the VM by a search over
+// yaw/axis-flip variants at the ground-truth pose: (x, y, z) -> (-y, x, -z) puts 86% of
+// Scan points within 0.3 m of the Map at zero offset; the raw frame puts ~1%.
+// Converting here keeps every later step in the Map's convention.
 template <typename Detection>
 PointT toMapConvention(const Detection& detection){
-	return PointT(-detection.x, -detection.y, -detection.z);
+	return PointT(-detection.y, detection.x, -detection.z);
 }
 
 PointCloudT pclCloud;
@@ -241,35 +240,11 @@ int main(){
 			cloudFiltered = voxelFilter(currentScan, kScanLeafSize);
 
 			// Step 2: NDT-match the Scan to the Map, seeded by a constant-velocity Initial guess.
-			const Eigen::Matrix4d initialGuess = currentTransform;  // EXPERIMENT: no motion prediction
+			const Eigen::Matrix4d initialGuess = predictNextTransform(previousTransform, currentTransform);
 			const Eigen::Matrix4d estimate = localizer.align(cloudFiltered, initialGuess);
 			previousTransform = currentTransform;
 			currentTransform = estimate;
 			pose = getPose(estimate);
-			static bool searched = false;  // DIAG: one-time frame search at ground truth
-			if (!searched) {
-				searched = true;
-				pcl::KdTreeFLANN<PointT> mapTree; mapTree.setInputCloud(mapCloud);
-				PointCloudT::Ptr raw = voxelFilter(currentScan, kScanLeafSize);
-				for (auto& p : raw->points) { p.x = -p.x; p.y = -p.y; p.z = -p.z; }  // undo toMapConvention -> raw sensor frame
-				auto inlierFrac = [&](const Eigen::Matrix4d& Tm){
-					PointCloudT moved; pcl::transformPointCloud(*raw, moved, Tm);
-					int in = 0; std::vector<int> idx(1); std::vector<float> d2(1);
-					for (const auto& p : moved.points){ mapTree.nearestKSearch(p, 1, idx, d2); if (d2[0] < 0.09f) in++; }
-					return double(in) / std::max<size_t>(1, moved.size());
-				};
-				const Eigen::Matrix4d T0 = poseToMatrix(truePose);
-				std::vector<std::pair<double, std::string>> results;
-				for (int fy = 0; fy < 2; ++fy) for (int fz = 0; fz < 2; ++fz) for (int deg = 0; deg < 360; deg += 15)
-				for (double dx = -1; dx <= 1.01; dx += 0.5) for (double dy = -1; dy <= 1.01; dy += 0.5) {
-					Eigen::Matrix4d F = Eigen::Matrix4d::Identity(); if (fy) F(1,1) = -1; if (fz) F(2,2) = -1;
-					const Eigen::Matrix4d R = transform3D(deg * pi / 180.0, 0, 0, 0, 0, 0);
-					const Eigen::Matrix4d D = transform3D(0, 0, 0, dx, dy, 0);
-					results.push_back({inlierFrac(D * T0 * R * F), "flipY=" + to_string(fy) + " flipZ=" + to_string(fz) + " yawDeg=" + to_string(deg) + " dx=" + to_string(dx) + " dy=" + to_string(dy)});
-				}
-				std::sort(results.rbegin(), results.rend());
-				for (int k = 0; k < 6; ++k) cout << "GRID " << results[k].first << " " << results[k].second << endl;
-			}
 			cout << "scan pts=" << cloudFiltered->size()
 			     << " conv=" << localizer.hasConverged() << " it=" << localizer.iterations()
 			     << " fit=" << localizer.fitnessScore()
