@@ -39,8 +39,6 @@ using namespace std;
 
 // Voxel leaf size (m) applied to each Scan before matching: fewer points = faster NDT.
 constexpr float kScanLeafSize = 0.5f;
-// Upper bound on latency compensation, in scan intervals, so a stalled frame can't fling the Pose.
-constexpr double kMaxLatencyFraction = 3.0;
 
 // The workspace simulator build (newer than the 0.9.9.4 client, hence the "version
 // mismatch" warning) reports lidar points rotated 90 deg about z and with z inverted
@@ -190,7 +188,9 @@ int main(){
 	bool isPoseInitialized = false;
 	Eigen::Matrix4d previousTransform = Eigen::Matrix4d::Identity();
 	Eigen::Matrix4d currentTransform = Eigen::Matrix4d::Identity();
-	std::chrono::time_point<std::chrono::system_clock> previousScanTime;
+	// Capture times of the Scans behind previousTransform and currentTransform.
+	std::chrono::time_point<std::chrono::system_clock> previousScanTime, currentScanTime;
+	auto secondsBetween = [](auto from, auto to){ return std::chrono::duration<double>(to - from).count(); };
 
 	while (!viewer->wasStopped())
   	{
@@ -240,29 +240,32 @@ int main(){
 				currentTransform = poseToMatrix(pose);
 				previousTransform = currentTransform;
 				previousScanTime = scanTime;
+				currentScanTime = scanTime;
 				isPoseInitialized = true;
 			}
 
 			// Step 1: downsample the Scan with a voxel grid.
 			cloudFiltered = voxelFilter(currentScan, kScanLeafSize);
 
-			// Step 2: NDT-match the Scan to the Map, seeded by a constant-velocity Initial guess.
-			const Eigen::Matrix4d initialGuess = predictNextTransform(previousTransform, currentTransform);
+			// Step 2: NDT-match the Scan to the Map. Initial guess: constant velocity over the
+			// actual time since the last Scan (scan intervals vary, especially when the VM stalls).
+			const Eigen::Matrix4d initialGuess = predictPose(previousTransform, currentTransform,
+				secondsBetween(previousScanTime, currentScanTime), secondsBetween(currentScanTime, scanTime));
 			const Eigen::Matrix4d estimate = localizer.align(cloudFiltered, initialGuess);
 			previousTransform = currentTransform;
+			previousScanTime = currentScanTime;
 			currentTransform = estimate;
+			currentScanTime = scanTime;
 
 			// Step 2b: the estimate is the Pose at scanTime, but the car has moved since
-			// (the scan waits in the buffer). Advance it by our own lidar-derived velocity.
-			const double scanInterval = std::chrono::duration<double>(scanTime - previousScanTime).count();
-			const double latency = std::chrono::duration<double>(frameTime - scanTime).count();
-			previousScanTime = scanTime;
-			const double latencyFraction = scanInterval > 0.0 ? std::min(std::max(latency / scanInterval, 0.0), kMaxLatencyFraction) : 0.0;
-			pose = getPose(extrapolateMotion(previousTransform, currentTransform, latencyFraction));
+			// (the Scan waits in the buffer). Advance it to this frame with the same model.
+			const double scanInterval = secondsBetween(previousScanTime, currentScanTime);
+			const double latency = secondsBetween(scanTime, frameTime);
+			pose = getPose(predictPose(previousTransform, currentTransform, scanInterval, latency));
 			cout << "LOG it=" << localizer.iterations() << " fit=" << localizer.fitnessScore()
 			     << " jump=" << (estimate.block<3,1>(0,3) - initialGuess.block<3,1>(0,3)).norm()
 			     << " step=" << (currentTransform.block<3,1>(0,3) - previousTransform.block<3,1>(0,3)).norm()
-			     << " lat=" << latency << " dt=" << scanInterval << " frac=" << latencyFraction
+			     << " lat=" << latency << " dt=" << scanInterval
 			     << " err=" << std::hypot(truePose.position.x - pose.position.x, truePose.position.y - pose.position.y)
 			     << " errScan=" << std::hypot(truePose.position.x - estimate(0,3), truePose.position.y - estimate(1,3))
 			     << " x=" << truePose.position.x << endl;  // DIAG

@@ -18,15 +18,15 @@ PointCloudT::Ptr voxelFilter(const PointCloudT::Ptr& cloud, float leafSize);
 // Converts a Pose (yaw/pitch/roll + position) into a homogeneous 4x4 transform.
 Eigen::Matrix4d poseToMatrix(const Pose& pose);
 
-// Constant-velocity motion model: applies the last inter-Scan motion once more
-// to produce the Initial guess for the next Scan. Falls back to "no motion" if
-// the last step is implausibly large (a sign the previous match diverged).
-Eigen::Matrix4d predictNextTransform(const Eigen::Matrix4d& previous, const Eigen::Matrix4d& current);
-
-// Advances `current` by `fraction` times the motion from `previous` to `current`
-// (translation and rotation both scaled). fraction = 1 repeats the last motion once;
-// fraction = latency / scanInterval moves a scan-time Pose estimate up to "now".
-Eigen::Matrix4d extrapolateMotion(const Eigen::Matrix4d& previous, const Eigen::Matrix4d& current, double fraction);
+// Constant-velocity motion model in *time*: velocity is the motion from `previous`
+// to `current` divided by `interval` (seconds between them), and the result is
+// `current` advanced by that velocity for `horizon` seconds (translation and
+// rotation, in the car frame). Used both for the NDT Initial guess (horizon = time
+// to the next Scan) and to bring a scan-time Pose estimate up to the display frame.
+// Returns `current` unchanged if the interval is degenerate or the implied speed is
+// implausible (a sign the last match diverged); the horizon is capped.
+Eigen::Matrix4d predictPose(const Eigen::Matrix4d& previous, const Eigen::Matrix4d& current,
+                            double interval, double horizon);
 
 // Aligns lidar Scans to the Map with PCL's Normal Distributions Transform.
 // The Map's NDT grid is built once at construction, which is the costly part.
