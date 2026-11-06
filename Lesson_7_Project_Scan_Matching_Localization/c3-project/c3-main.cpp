@@ -155,6 +155,13 @@ int main(){
 
 		if(new_scan){
 			auto scan = boost::static_pointer_cast<csd::LidarMeasurement>(data);
+			static int rawDumps = 0;  // DIAG: inspect raw point layout
+			if (rawDumps < 2 && scan->size() > 12) {
+				rawDumps++;
+				cout << "RAW size=" << scan->size() << " channels=" << scan->GetChannelCount() << " :";
+				for (size_t k = 0; k < 12; ++k) { auto d = (*scan)[k]; cout << " (" << d.x << "," << d.y << "," << d.z << ")"; }
+				cout << endl;
+			}
 			for (auto detection : *scan){
 				if((detection.x*detection.x + detection.y*detection.y + detection.z*detection.z) > 8.0){
 					pclCloud.points.push_back(PointT(detection.x, detection.y, detection.z));
