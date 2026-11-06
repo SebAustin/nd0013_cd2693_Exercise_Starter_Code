@@ -12,7 +12,7 @@ PointCloudT::Ptr voxelFilter(const PointCloudT::Ptr& cloud, float leafSize) {
 	// EXPERIMENT: drop road-surface returns (lidar is 1.8 m up) so ground rings can't bias NDT.
 	PointCloudT::Ptr aboveGround(new PointCloudT);
 	for (const auto& p : cloud->points) {
-		if (p.z > -1.4f) aboveGround->points.push_back(p);
+		aboveGround->points.push_back(p);  // DIAG: ground filter off while frame is unknown
 	}
 	aboveGround->width = aboveGround->points.size();
 	aboveGround->height = 1;

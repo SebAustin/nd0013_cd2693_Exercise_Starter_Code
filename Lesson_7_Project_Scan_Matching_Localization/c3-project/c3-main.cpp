@@ -264,13 +264,13 @@ int main(){
 					const Eigen::Matrix4d T0 = poseToMatrix(truePose);
 					cout << "GRID truth inliers=" << inlierFrac(T0) << endl;
 					double best = -1; std::string bestDesc;
-					for (int flip = 0; flip < 2; ++flip) for (int yawFlip = 0; yawFlip < 2; ++yawFlip) for (int dz = 0; dz < 2; ++dz)
-					for (double dx = -3; dx <= 3.01; dx += 0.25) for (double dy = -3; dy <= 3.01; dy += 0.25) {
-						Eigen::Matrix4d F = Eigen::Matrix4d::Identity(); if (flip) F(1,1) = -1;
+					for (int flip = 0; flip < 2; ++flip) for (int yawFlip = 0; yawFlip < 2; ++yawFlip) for (int fz = 0; fz < 2; ++fz)
+					for (double dx = -2; dx <= 2.01; dx += 0.25) for (double dy = -2; dy <= 2.01; dy += 0.25) {
+						Eigen::Matrix4d F = Eigen::Matrix4d::Identity(); if (flip) F(1,1) = -1; if (fz) F(2,2) = -1;
 						Eigen::Matrix4d R = transform3D(yawFlip ? pi : 0, 0, 0, 0, 0, 0);
-						Eigen::Matrix4d D = transform3D(0, 0, 0, dx, dy, dz ? -1.8 : 0);
+						Eigen::Matrix4d D = transform3D(0, 0, 0, dx, dy, 0);
 						const double f = inlierFrac(D * T0 * R * F);
-						if (f > best) { best = f; bestDesc = "flipY=" + to_string(flip) + " yawPi=" + to_string(yawFlip) + " dz=" + to_string(dz) + " dx=" + to_string(dx) + " dy=" + to_string(dy); }
+						if (f > best) { best = f; bestDesc = "flipY=" + to_string(flip) + " yawPi=" + to_string(yawFlip) + " flipZ=" + to_string(fz) + " dx=" + to_string(dx) + " dy=" + to_string(dy); }
 					}
 					cout << "GRID best inliers=" << best << " " << bestDesc << endl;
 				}
