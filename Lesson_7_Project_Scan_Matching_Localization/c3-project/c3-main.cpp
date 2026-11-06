@@ -35,6 +35,8 @@ using namespace std;
 #include <pcl/registration/ndt.h>
 #include <pcl/console/time.h>   // TicToc
 #include <pcl/common/transforms.h>
+#include <pcl/kdtree/kdtree_flann.h>  // DIAG
+#include <algorithm>
 #include "localization.h"
 
 // Voxel leaf size (m) applied to each Scan before matching: fewer points = faster NDT.
@@ -244,6 +246,30 @@ int main(){
 			previousTransform = currentTransform;
 			currentTransform = estimate;
 			pose = getPose(estimate);
+			static bool searched = false;  // DIAG: one-time frame search at ground truth
+			if (!searched) {
+				searched = true;
+				pcl::KdTreeFLANN<PointT> mapTree; mapTree.setInputCloud(mapCloud);
+				PointCloudT::Ptr raw = voxelFilter(currentScan, kScanLeafSize);
+				for (auto& p : raw->points) { p.x = -p.x; p.y = -p.y; p.z = -p.z; }  // undo toMapConvention -> raw sensor frame
+				auto inlierFrac = [&](const Eigen::Matrix4d& Tm){
+					PointCloudT moved; pcl::transformPointCloud(*raw, moved, Tm);
+					int in = 0; std::vector<int> idx(1); std::vector<float> d2(1);
+					for (const auto& p : moved.points){ mapTree.nearestKSearch(p, 1, idx, d2); if (d2[0] < 0.09f) in++; }
+					return double(in) / std::max<size_t>(1, moved.size());
+				};
+				const Eigen::Matrix4d T0 = poseToMatrix(truePose);
+				std::vector<std::pair<double, std::string>> results;
+				for (int fy = 0; fy < 2; ++fy) for (int fz = 0; fz < 2; ++fz) for (int deg = 0; deg < 360; deg += 15)
+				for (double dx = -1; dx <= 1.01; dx += 0.5) for (double dy = -1; dy <= 1.01; dy += 0.5) {
+					Eigen::Matrix4d F = Eigen::Matrix4d::Identity(); if (fy) F(1,1) = -1; if (fz) F(2,2) = -1;
+					const Eigen::Matrix4d R = transform3D(deg * pi / 180.0, 0, 0, 0, 0, 0);
+					const Eigen::Matrix4d D = transform3D(0, 0, 0, dx, dy, 0);
+					results.push_back({inlierFrac(D * T0 * R * F), "flipY=" + to_string(fy) + " flipZ=" + to_string(fz) + " yawDeg=" + to_string(deg) + " dx=" + to_string(dx) + " dy=" + to_string(dy)});
+				}
+				std::sort(results.rbegin(), results.rend());
+				for (int k = 0; k < 6; ++k) cout << "GRID " << results[k].first << " " << results[k].second << endl;
+			}
 			cout << "scan pts=" << cloudFiltered->size()
 			     << " conv=" << localizer.hasConverged() << " it=" << localizer.iterations()
 			     << " fit=" << localizer.fitnessScore()
