@@ -245,6 +245,28 @@ int main(){
 				};
 				int bins[8] = {0};
 				for (const auto& p : currentScan->points){ int b = int((std::atan2(p.y, p.x) + pi) / (2*pi) * 8) % 8; bins[b]++; }
+				static bool searched = false;
+				if (!searched) {  // one-time grid search: which frame variant makes the scan fit the map at truth?
+					searched = true;
+					auto inlierFrac = [&](const Eigen::Matrix4d& Tm){
+						PointCloudT moved; pcl::transformPointCloud(*cloudFiltered, moved, Tm);
+						int in = 0; std::vector<int> idx(1); std::vector<float> d2(1);
+						for (const auto& p : moved.points){ mapTree.nearestKSearch(p, 1, idx, d2); if (d2[0] < 0.09f) in++; }
+						return double(in) / std::max<size_t>(1, moved.size());
+					};
+					const Eigen::Matrix4d T0 = poseToMatrix(truePose);
+					cout << "GRID truth inliers=" << inlierFrac(T0) << endl;
+					double best = -1; std::string bestDesc;
+					for (int flip = 0; flip < 2; ++flip) for (int yawFlip = 0; yawFlip < 2; ++yawFlip) for (int dz = 0; dz < 2; ++dz)
+					for (double dx = -3; dx <= 3.01; dx += 0.25) for (double dy = -3; dy <= 3.01; dy += 0.25) {
+						Eigen::Matrix4d F = Eigen::Matrix4d::Identity(); if (flip) F(1,1) = -1;
+						Eigen::Matrix4d R = transform3D(yawFlip ? pi : 0, 0, 0, 0, 0, 0);
+						Eigen::Matrix4d D = transform3D(0, 0, 0, dx, dy, dz ? -1.8 : 0);
+						const double f = inlierFrac(D * T0 * R * F);
+						if (f > best) { best = f; bestDesc = "flipY=" + to_string(flip) + " yawPi=" + to_string(yawFlip) + " dz=" + to_string(dz) + " dx=" + to_string(dx) + " dy=" + to_string(dy); }
+					}
+					cout << "GRID best inliers=" << best << " " << bestDesc << endl;
+				}
 				Eigen::Matrix4d flipY = Eigen::Matrix4d::Identity(); flipY(1,1) = -1;
 				Eigen::Matrix4d down = Eigen::Matrix4d::Identity(); down(2,3) = -1.8;
 				const Eigen::Matrix4d T = poseToMatrix(truePose);
