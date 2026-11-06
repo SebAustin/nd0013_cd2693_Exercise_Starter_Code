@@ -39,6 +39,8 @@ using namespace std;
 
 // Voxel leaf size (m) applied to each Scan before matching: fewer points = faster NDT.
 constexpr float kScanLeafSize = 0.5f;
+// Upper bound on latency compensation, in scan intervals, so a stalled frame can't fling the Pose.
+constexpr double kMaxLatencyFraction = 3.0;
 
 // The workspace simulator build (newer than the 0.9.9.4 client, hence the "version
 // mismatch" warning) reports lidar points rotated 90 deg about z and with z inverted
@@ -188,6 +190,7 @@ int main(){
 	bool isPoseInitialized = false;
 	Eigen::Matrix4d previousTransform = Eigen::Matrix4d::Identity();
 	Eigen::Matrix4d currentTransform = Eigen::Matrix4d::Identity();
+	std::chrono::time_point<std::chrono::system_clock> previousScanTime;
 
 	while (!viewer->wasStopped())
   	{
@@ -200,6 +203,8 @@ int main(){
 			refresh_view = false;
 		}
 		
+		// Timestamp of this display frame; the published Pose estimate is advanced to it.
+		const auto frameTime = std::chrono::system_clock::now();
 		viewer->removeShape("box0");
 		viewer->removeShape("boxFill0");
 		Pose truePose = Pose(Point(vehicle->GetTransform().location.x, vehicle->GetTransform().location.y, vehicle->GetTransform().location.z), Rotate(vehicle->GetTransform().rotation.yaw * pi/180, vehicle->GetTransform().rotation.pitch * pi/180, vehicle->GetTransform().rotation.roll * pi/180)) - poseRef;
@@ -226,6 +231,7 @@ int main(){
 			// Snapshot the Scan and empty the lidar buffer *before* re-arming the
 			// listener, so the lidar thread never writes while we are reading.
 			PointCloudT::Ptr currentScan(new PointCloudT(*scanCloud));
+			const auto scanTime = lastScanTime;
 			pclCloud.points.clear();
 			new_scan = true;
 
@@ -233,6 +239,7 @@ int main(){
 				pose = truePose;
 				currentTransform = poseToMatrix(pose);
 				previousTransform = currentTransform;
+				previousScanTime = scanTime;
 				isPoseInitialized = true;
 			}
 
@@ -244,10 +251,17 @@ int main(){
 			const Eigen::Matrix4d estimate = localizer.align(cloudFiltered, initialGuess);
 			previousTransform = currentTransform;
 			currentTransform = estimate;
-			pose = getPose(estimate);
+
+			// Step 2b: the estimate is the Pose at scanTime, but the car has moved since
+			// (the scan waits in the buffer). Advance it by our own lidar-derived velocity.
+			const double scanInterval = std::chrono::duration<double>(scanTime - previousScanTime).count();
+			const double latency = std::chrono::duration<double>(frameTime - scanTime).count();
+			previousScanTime = scanTime;
+			const double latencyFraction = scanInterval > 0.0 ? std::min(std::max(latency / scanInterval, 0.0), kMaxLatencyFraction) : 0.0;
+			pose = getPose(extrapolateMotion(previousTransform, currentTransform, latencyFraction));
 			cout << "scan pts=" << cloudFiltered->size()
 			     << " conv=" << localizer.hasConverged() << " it=" << localizer.iterations()
-			     << " fit=" << localizer.fitnessScore()
+			     << " fit=" << localizer.fitnessScore() << " lat=" << latency << " dt=" << scanInterval
 			     << " guess=(" << initialGuess(0,3) << "," << initialGuess(1,3) << ")"
 			     << " est=(" << pose.position.x << "," << pose.position.y << "," << pose.position.z << " yaw " << pose.rotation.yaw << ")"
 			     << " true=(" << truePose.position.x << "," << truePose.position.y << "," << truePose.position.z << " yaw " << truePose.rotation.yaw << ")" << endl;

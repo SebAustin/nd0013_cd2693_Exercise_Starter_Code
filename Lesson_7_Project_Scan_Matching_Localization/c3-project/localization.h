@@ -23,6 +23,11 @@ Eigen::Matrix4d poseToMatrix(const Pose& pose);
 // the last step is implausibly large (a sign the previous match diverged).
 Eigen::Matrix4d predictNextTransform(const Eigen::Matrix4d& previous, const Eigen::Matrix4d& current);
 
+// Advances `current` by `fraction` times the motion from `previous` to `current`
+// (translation and rotation both scaled). fraction = 1 repeats the last motion once;
+// fraction = latency / scanInterval moves a scan-time Pose estimate up to "now".
+Eigen::Matrix4d extrapolateMotion(const Eigen::Matrix4d& previous, const Eigen::Matrix4d& current, double fraction);
+
 // Aligns lidar Scans to the Map with PCL's Normal Distributions Transform.
 // The Map's NDT grid is built once at construction, which is the costly part.
 class NdtLocalizer {

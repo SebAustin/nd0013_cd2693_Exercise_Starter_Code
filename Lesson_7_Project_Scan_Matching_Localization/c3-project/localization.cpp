@@ -22,14 +22,23 @@ Eigen::Matrix4d poseToMatrix(const Pose& pose) {
 	                   pose.position.x, pose.position.y, pose.position.z);
 }
 
-Eigen::Matrix4d predictNextTransform(const Eigen::Matrix4d& previous, const Eigen::Matrix4d& current) {
+Eigen::Matrix4d extrapolateMotion(const Eigen::Matrix4d& previous, const Eigen::Matrix4d& current, double fraction) {
 	// Motion expressed in the car's frame, so it stays valid while turning.
 	const Eigen::Matrix4d motion = previous.inverse() * current;
-	const double step = motion.block<3, 1>(0, 3).norm();
-	if (step > kMaxPlausibleStepMetres) {
-		return current;
+	if (motion.block<3, 1>(0, 3).norm() > kMaxPlausibleStepMetres) {
+		return current;  // previous match likely diverged; don't amplify it
 	}
-	return current * motion;
+	Eigen::AngleAxisd rotation(Eigen::Matrix3d(motion.block<3, 3>(0, 0)));
+	rotation.angle() *= fraction;
+
+	Eigen::Matrix4d scaled = Eigen::Matrix4d::Identity();
+	scaled.block<3, 3>(0, 0) = rotation.toRotationMatrix();
+	scaled.block<3, 1>(0, 3) = motion.block<3, 1>(0, 3) * fraction;
+	return current * scaled;
+}
+
+Eigen::Matrix4d predictNextTransform(const Eigen::Matrix4d& previous, const Eigen::Matrix4d& current) {
+	return extrapolateMotion(previous, current, 1.0);
 }
 
 NdtLocalizer::NdtLocalizer(const PointCloudT::Ptr& map, const NdtConfig& config) {
