@@ -34,6 +34,11 @@ using namespace std;
 #include <pcl/registration/icp.h>
 #include <pcl/registration/ndt.h>
 #include <pcl/console/time.h>   // TicToc
+#include <pcl/common/transforms.h>
+#include "localization.h"
+
+// Voxel leaf size (m) applied to each Scan before matching: fewer points = faster NDT.
+constexpr float kScanLeafSize = 0.5f;
 
 PointCloudT pclCloud;
 cc::Vehicle::Control control;
@@ -165,6 +170,14 @@ int main(){
 	Pose poseRef(Point(vehicle->GetTransform().location.x, vehicle->GetTransform().location.y, vehicle->GetTransform().location.z), Rotate(vehicle->GetTransform().rotation.yaw * pi/180, vehicle->GetTransform().rotation.pitch * pi/180, vehicle->GetTransform().rotation.roll * pi/180));
 	double maxError = 0;
 
+	// Scan matcher: the Map's NDT grid is built once here, not per Scan.
+	NdtLocalizer localizer(mapCloud, NdtConfig{});
+	PointCloudT::Ptr transformedScan(new PointCloudT);
+	// Ground-truth pose is used exactly once, to seed the first Pose estimate.
+	bool isPoseInitialized = false;
+	Eigen::Matrix4d previousTransform = Eigen::Matrix4d::Identity();
+	Eigen::Matrix4d currentTransform = Eigen::Matrix4d::Identity();
+
 	while (!viewer->wasStopped())
   	{
 		while(new_scan){
@@ -199,17 +212,33 @@ int main(){
 		
 		if(!new_scan){
 			
+			// Snapshot the Scan and empty the lidar buffer *before* re-arming the
+			// listener, so the lidar thread never writes while we are reading.
+			PointCloudT::Ptr currentScan(new PointCloudT(*scanCloud));
+			pclCloud.points.clear();
 			new_scan = true;
-			// TODO: (Filter scan using voxel filter)
 
-			// TODO: Find pose transform by using ICP or NDT matching
-			//pose = ....
+			if(!isPoseInitialized){
+				pose = truePose;
+				currentTransform = poseToMatrix(pose);
+				previousTransform = currentTransform;
+				isPoseInitialized = true;
+			}
 
-			// TODO: Transform scan so it aligns with ego's actual pose and render that scan
+			// Step 1: downsample the Scan with a voxel grid.
+			cloudFiltered = voxelFilter(currentScan, kScanLeafSize);
 
+			// Step 2: NDT-match the Scan to the Map, seeded by a constant-velocity Initial guess.
+			const Eigen::Matrix4d initialGuess = predictNextTransform(previousTransform, currentTransform);
+			const Eigen::Matrix4d estimate = localizer.align(cloudFiltered, initialGuess);
+			previousTransform = currentTransform;
+			currentTransform = estimate;
+			pose = getPose(estimate);
+
+			// Step 3: move the Scan into the Map frame using the Pose estimate and render it.
+			pcl::transformPointCloud(*cloudFiltered, *transformedScan, estimate);
 			viewer->removePointCloud("scan");
-			// TODO: Change `scanCloud` below to your transformed scan
-			renderPointCloud(viewer, scanCloud, "scan", Color(1,0,0) );
+			renderPointCloud(viewer, transformedScan, "scan", Color(1,0,0) );
 
 			viewer->removeAllShapes();
 			drawCar(pose, 1,  Color(0,1,0), 0.35, viewer);
@@ -234,8 +263,6 @@ int main(){
 				viewer->addText("Passed!", 200, 50, 32, 0.0, 1.0, 0.0, "eval",0);
 			}
 		}
-
-			pclCloud.points.clear();
 		}
   	}
 	return 0;
